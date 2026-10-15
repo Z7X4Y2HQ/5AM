@@ -4,6 +4,8 @@
 
 The current app includes local music, Spotify, and a separate Mix area. Mix playlists can collect tracks from the supported sources. YouTube Music, SoundCloud, and other providers are future integrations; they are not connected yet.
 
+<img width="1919" height="1025" alt="image" src="https://github.com/user-attachments/assets/a8da0372-2628-40c0-8f9e-32e2401a0e4b" />
+
 ## What is in the app today
 
 ### Local library
