@@ -279,7 +279,10 @@ function App() {
   const [viewHistory, setViewHistory] = useState(['home'])
   const [viewHistoryIndex, setViewHistoryIndex] = useState(0)
   const [search, setSearch] = useState('')
-  const [current, setCurrent] = useState(null)
+  const [current, setCurrent] = useState(() => {
+    const saved = restorePlaybackSession(readPlaybackSession())
+    return saved?.provider === 'spotify' ? saved.current : null
+  })
   const currentTrackRef = useRef(current)
   currentTrackRef.current = current
   const [trackTextTransition, setTrackTextTransition] = useState(null)
@@ -320,8 +323,14 @@ function App() {
   const [spotifyClientId, setSpotifyClientId] = useState(getSpotifyClientId())
   const [spotifyConnected, setSpotifyConnected] = useState(hasSpotifySession())
   const [spotifyPlayerReady, setSpotifyPlayerReady] = useState(false)
-  const [spotifyMode, setSpotifyMode] = useState(false)
-  const [mixMode, setMixMode] = useState(false)
+  const [spotifyMode, setSpotifyMode] = useState(() => {
+    const saved = restorePlaybackSession(readPlaybackSession())
+    return saved?.provider === 'spotify' && saved.context?.type !== 'mix'
+  })
+  const [mixMode, setMixMode] = useState(() => {
+    const saved = restorePlaybackSession(readPlaybackSession())
+    return saved?.provider === 'spotify' && saved.context?.type === 'mix'
+  })
   const [spotifyTracks, setSpotifyTracks] = useState([])
   const [spotifyCollectionTrackTotal, setSpotifyCollectionTrackTotal] = useState(0)
   const [spotifyHasMore, setSpotifyHasMore] = useState(false)
@@ -672,7 +681,7 @@ function App() {
             const contextName = playlist?.name || state.context?.metadata?.context_description || cachedPlaylistName || 'Spotify Playlist'
             playbackContext = { type: 'playlist', id: playlistId, name: contextName, total: playlist?.total || savedSession?.context?.total || 0 }
           } else if (!playbackContext && contextUri.startsWith('spotify:album:')) {
-            playbackContext = savedContextMatchesTrack && ['playlist', 'liked', 'search'].includes(savedSession?.context?.type)
+            playbackContext = savedContextMatchesTrack && ['playlist', 'liked', 'mix', 'search'].includes(savedSession?.context?.type)
               ? savedSession.context
               : { type: 'album', name: track.album, total: track.albumTrackCount }
           } else if (!playbackContext && savedContextMatchesTrack && savedSession?.context) {
@@ -1262,7 +1271,7 @@ function App() {
           ? playlists.find((playlist) => playlist.id === view.slice(9))?.trackIds.length ?? 0
           : tracks.length
   const topbarLabel = current?.source === 'spotify'
-    ? ['playlist', 'liked', 'mix'].includes(spotifyPlaybackContext?.type) ? spotifyPlaybackContext.name : current.album || queueLabel
+    ? spotifyPlaybackContext?.name || (queueLabel !== 'Library' ? queueLabel : current.album || queueLabel)
     : queueLabel
 
   const title = useMemo(() => {

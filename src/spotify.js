@@ -73,12 +73,19 @@ export async function startSpotifyLogin(clientId) {
 
 function saveToken(token) {
   const value = { ...token, expires_at: Date.now() + token.expires_in * 1000 }
-  window.sessionStorage.setItem(TOKEN_KEY, JSON.stringify(value))
+  window.localStorage.setItem(TOKEN_KEY, JSON.stringify(value))
+  window.sessionStorage.removeItem(TOKEN_KEY)
   return value
 }
 
 function readToken() {
-  try { return JSON.parse(window.sessionStorage.getItem(TOKEN_KEY) || 'null') } catch { return null }
+  try {
+    const storedToken = window.localStorage.getItem(TOKEN_KEY) || window.sessionStorage.getItem(TOKEN_KEY)
+    const token = JSON.parse(storedToken || 'null')
+    if (token && !window.localStorage.getItem(TOKEN_KEY)) window.localStorage.setItem(TOKEN_KEY, JSON.stringify(token))
+    window.sessionStorage.removeItem(TOKEN_KEY)
+    return token
+  } catch { return null }
 }
 
 export function hasSpotifySession() {
@@ -110,7 +117,8 @@ async function finishSpotifyLoginRequest() {
   saveToken(token)
   window.sessionStorage.removeItem(VERIFIER_KEY)
   window.sessionStorage.removeItem(STATE_KEY)
-  window.history.replaceState({}, '', `${window.location.origin}/`)
+  const appBasePath = new URL(import.meta.env.BASE_URL, window.location.origin).pathname
+  window.history.replaceState({}, '', appBasePath)
   return true
 }
 
@@ -163,6 +171,7 @@ export async function spotifyFetch(path, options = {}) {
 }
 
 export function clearSpotifySession() {
+  window.localStorage.removeItem(TOKEN_KEY)
   window.sessionStorage.removeItem(TOKEN_KEY)
 }
 
