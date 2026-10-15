@@ -1,22 +1,22 @@
 {
-  "id": "/",
+  "id": "./",
   "name": "5AM",
   "short_name": "5AM",
   "description": "5AM brings local music and connected streaming services into one player, with a vision for custom playlists that mix tracks from Spotify, YouTube Music, SoundCloud, and more. It starts with local music and Spotify, with more services planned.",
-  "start_url": "/",
-  "scope": "/",
+  "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "background_color": "#100d0e",
   "theme_color": "#482a31",
   "icons": [
     {
-      "src": "/pwa-icon-192.svg",
+      "src": "pwa-icon-192.svg",
       "sizes": "192x192",
       "type": "image/svg+xml",
       "purpose": "any"
     },
     {
-      "src": "/pwa-icon-512.svg",
+      "src": "pwa-icon-512.svg",
       "sizes": "512x512",
       "type": "image/svg+xml",
       "purpose": "any maskable"

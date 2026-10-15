@@ -93,6 +93,12 @@ Each person connecting Spotify needs to use a Spotify Client ID from a Spotify d
    http://127.0.0.1:5173/callback
    ```
 
+   For the public GitHub Pages deployment, also add this exact redirect URI to the Spotify app:
+
+   ```text
+   https://z7x4y2hq.github.io/5AM/
+   ```
+
    The URI must match exactly, including scheme, host, port, and path. The app normalizes `localhost` to `127.0.0.1` for the Spotify redirect. If Vite starts on another port, register that port and use that origin when opening 5AM.
 
 3. In 5AM, open the Spotify section, choose the setup option, enter the app's **Client ID**, and connect your account.

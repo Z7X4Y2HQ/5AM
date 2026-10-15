@@ -14,6 +14,12 @@ async function readJsonBody(response) {
 
 export const spotifyRedirectUri = () => {
   const url = new URL(window.location.href)
+  if (import.meta.env.PROD) {
+    url.pathname = import.meta.env.BASE_URL
+    url.search = ''
+    url.hash = ''
+    return `${url.origin}${url.pathname}`
+  }
   if (url.hostname === 'localhost') url.hostname = '127.0.0.1'
   url.pathname = '/callback'
   url.search = ''
