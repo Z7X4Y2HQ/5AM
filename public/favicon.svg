@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="base" x1="0" y1="1" x2="1" y2="0" gradientUnits="objectBoundingBox">
+      <stop offset="0" stop-color="#100e0f"/>
+      <stop offset=".51" stop-color="#151013"/>
+      <stop offset="1" stop-color="#1a1114"/>
+    </linearGradient>
+    <radialGradient id="glow-main" cx="80%" cy="54%" r="62%">
+      <stop offset="0" stop-color="#482a31" stop-opacity=".58"/>
+      <stop offset="1" stop-color="#482a31" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow-low" cx="60%" cy="110%" r="66%">
+      <stop offset="0" stop-color="#482a31" stop-opacity=".3"/>
+      <stop offset="1" stop-color="#482a31" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="shade" x1="0" y1="0" x2="1" y2="0" gradientUnits="objectBoundingBox">
+      <stop offset="0" stop-color="#000" stop-opacity=".12"/>
+      <stop offset=".53" stop-color="#000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000" stop-opacity=".05"/>
+    </linearGradient>
+    <clipPath id="icon-shape"><rect width="64" height="64" rx="16"/></clipPath>
+  </defs>
+  <g clip-path="url(#icon-shape)">
+    <rect width="64" height="64" fill="url(#base)"/>
+    <rect width="64" height="64" fill="url(#glow-main)"/>
+    <rect width="64" height="64" fill="url(#glow-low)"/>
+    <rect width="64" height="64" fill="url(#shade)"/>
+    <text x="32" y="42" fill="#fff7f8" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="800" letter-spacing="-1.2" text-anchor="middle">FAM</text>
+  </g>
+</svg>
