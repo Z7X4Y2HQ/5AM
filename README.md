@@ -6,6 +6,8 @@ The current app includes local music, Spotify, and a separate Mix area. Mix play
 
 <img width="1919" height="1025" alt="image" src="https://github.com/user-attachments/assets/a8da0372-2628-40c0-8f9e-32e2401a0e4b" />
 
+<img width="1919" height="1024" alt="image" src="https://github.com/user-attachments/assets/2d8e49d9-874f-4528-98d8-6881ef395540" />
+
 ## What is in the app today
 
 ### Local library
