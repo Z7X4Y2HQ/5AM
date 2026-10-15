@@ -284,6 +284,8 @@ function App() {
   currentTrackRef.current = current
   const [trackTextTransition, setTrackTextTransition] = useState(null)
   const [artworkCenter, setArtworkCenter] = useState(null)
+  const [viewportSize, setViewportSize] = useState(() => ({ width: window.innerWidth, height: window.innerHeight }))
+  const [isViewportResizing, setIsViewportResizing] = useState(false)
   const [queue, setQueue] = useState(() => {
     const saved = restorePlaybackSession(readPlaybackSession())
     return saved?.provider === 'spotify' ? saved.queue : []
@@ -354,6 +356,7 @@ function App() {
   const currentQueuePositionRef = useRef(-1)
   const trackTextTransitionTimerRef = useRef(null)
   const trackTextTransitionIdRef = useRef(0)
+  const resizeSettleTimerRef = useRef(null)
 
   useEffect(() => {
     if (showLibrary) {
@@ -373,7 +376,13 @@ function App() {
   const searchRef = useRef(null)
   const swipeStartRef = useRef(null)
   const swipeHandledRef = useRef(false)
+  const mobileControlsTimerRef = useRef(null)
   const artworkWrapRef = useRef(null)
+  const [mobileControlsVisible, setMobileControlsVisible] = useState(false)
+  const [isArtworkDragging, setIsArtworkDragging] = useState(false)
+  const [artworkDragDirection, setArtworkDragDirection] = useState(null)
+  const artworkTapTimerRef = useRef(null)
+  const artworkTapPositionRef = useRef(null)
   const spotifyPlaylistsRef = useRef([])
 
   useEffect(() => {
@@ -950,15 +959,30 @@ function App() {
     if (!artwork) return undefined
     const updateCenter = () => {
       const rect = artwork.getBoundingClientRect()
-      setArtworkCenter((previous) => previous && previous.left === rect.left && previous.top === rect.top && previous.width === rect.width
+      setArtworkCenter((previous) => previous && previous.left === rect.left && previous.top === rect.top && previous.width === rect.width && previous.height === rect.height
         ? previous
         : { left: rect.left, top: rect.top, width: rect.width, height: rect.height })
     }
+    const updateViewport = () => {
+      const nextSize = { width: window.innerWidth, height: window.innerHeight }
+      setViewportSize((previous) => previous.width === nextSize.width && previous.height === nextSize.height ? previous : nextSize)
+      setIsViewportResizing(true)
+      window.clearTimeout(resizeSettleTimerRef.current)
+      resizeSettleTimerRef.current = window.setTimeout(() => setIsViewportResizing(false), 140)
+      updateCenter()
+    }
     updateCenter()
+    updateViewport()
     const observer = new ResizeObserver(updateCenter)
     observer.observe(artwork)
-    window.addEventListener('resize', updateCenter)
-    return () => { observer.disconnect(); window.removeEventListener('resize', updateCenter) }
+    window.addEventListener('resize', updateViewport)
+    window.visualViewport?.addEventListener('resize', updateViewport)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', updateViewport)
+      window.visualViewport?.removeEventListener('resize', updateViewport)
+      window.clearTimeout(resizeSettleTimerRef.current)
+    }
   }, [])
 
   useEffect(() => {
@@ -1071,40 +1095,89 @@ function App() {
     const start = Math.min(Math.max(currentIndex - 2, 0), Math.max(queue.length - 5, 0))
     return queue.slice(start, start + 5).map((track, index) => ({ track, offset: start + index - currentIndex, queueIndex: start + index }))
   }, [queue, currentIndex, repeatMode])
-  const viewportWidth = window.innerWidth
-  const viewportHeight = window.innerHeight
-  const peekSize = viewportWidth <= 700
-    ? Math.max(170, Math.min(viewportWidth * .42, 260))
-    : Math.max(180, Math.min(viewportWidth * .17, 280))
-  const peekLeft = viewportWidth <= 700 ? .43 : viewportWidth <= 1000 ? .68 : viewportWidth <= 1600 ? .69 : .72
+  const viewportWidth = viewportSize.width
+  const viewportHeight = viewportSize.height
+  const peekSize = artworkCenter?.width || (viewportWidth <= 700
+    ? Math.max(170, Math.min(viewportWidth * .88, 380))
+    : Math.max(180, Math.min(viewportWidth * .17, 280)))
   const cardPosition = (offset) => {
     const centerX = artworkCenter ? artworkCenter.left + artworkCenter.width / 2 : viewportWidth / 2
     const centerY = artworkCenter ? artworkCenter.top + artworkCenter.height / 2 : viewportHeight / 2
     const centerScale = artworkCenter ? artworkCenter.width / peekSize : 1
-    const x = offset === 0 ? centerX : viewportWidth * peekLeft
+    const x = centerX
     const y = offset === 0 ? centerY : offset < 0
       ? -((Math.abs(offset) - 1) * viewportHeight) - peekSize * .34
-      : offset * viewportHeight + peekSize * (offset === 1 ? .5 : .34)
-    const scaleX = offset === 0 ? centerScale : offset === 1 ? centerScale * 1.14 : 1
-    const scaleY = offset === 0 ? centerScale : offset === 1 ? centerScale * 1.08 : 1
+      : offset * viewportHeight + peekSize * (offset === 1 ? .24 : .34)
+    const scaleX = offset === 0 ? centerScale : 1
+    const scaleY = offset === 0 ? centerScale : 1
     return { '--card-x': `${x}px`, '--card-y': `${y}px`, '--card-scale-x': scaleX, '--card-scale-y': scaleY, '--card-opacity': Math.abs(offset) === 1 ? .68 : 0, '--peek-size': `${peekSize}px` }
   }
   const isMixLiked = (track) => Boolean(track && mixLikes.some((entry) => entry.source === track.source && entry.trackId === track.id))
 
+  const revealMobileControls = () => {
+    setMobileControlsVisible(true)
+    window.clearTimeout(mobileControlsTimerRef.current)
+    mobileControlsTimerRef.current = window.setTimeout(() => setMobileControlsVisible(false), 3000)
+  }
+
+  useEffect(() => () => {
+    window.clearTimeout(mobileControlsTimerRef.current)
+    window.clearTimeout(artworkTapTimerRef.current)
+  }, [])
+
   const startArtworkSwipe = (event) => {
-    if (event.pointerType === 'touch') { swipeHandledRef.current = false; swipeStartRef.current = { x: event.clientX, y: event.clientY } }
+    if (event.pointerType !== 'touch' || event.target.closest?.('.mobile-art-controls')) return
+    swipeHandledRef.current = false
+    swipeStartRef.current = { x: event.clientX, y: event.clientY }
+    setArtworkDragDirection(null)
+    event.currentTarget.style.setProperty('--drag-y', '0px')
+    setIsArtworkDragging(true)
+    try { event.currentTarget.setPointerCapture(event.pointerId) } catch {}
+  }
+  const moveArtworkSwipe = (event) => {
+    const start = swipeStartRef.current
+    if (!start) return
+    const deltaX = event.clientX - start.x
+    const deltaY = event.clientY - start.y
+    if (Math.abs(deltaY) <= Math.abs(deltaX) * 1.1) return
+    const cardHeight = event.currentTarget.getBoundingClientRect().height
+    const boundedDeltaY = Math.max(-cardHeight, Math.min(cardHeight, deltaY))
+    setArtworkDragDirection(deltaY < 0 ? 'next' : 'previous')
+    event.currentTarget.style.setProperty('--drag-y', `${boundedDeltaY}px`)
+    const cards = event.currentTarget.parentElement?.querySelectorAll('.carousel-card')
+    cards?.forEach((card) => {
+      if (card === event.currentTarget) return
+      if (card.classList.contains('carousel-card--previous') || card.classList.contains('carousel-card--next')) card.style.setProperty('--drag-y', `${boundedDeltaY}px`)
+      else card.style.removeProperty('--drag-y')
+    })
   }
   const endArtworkSwipe = (event) => {
     const start = swipeStartRef.current
     swipeStartRef.current = null
-    if (!start) return
-    const deltaX = event.clientX - start.x
-    const deltaY = event.clientY - start.y
-    if (Math.abs(deltaY) > 48 && Math.abs(deltaY) > Math.abs(deltaX) * 1.25) {
-      swipeHandledRef.current = true
-      window.setTimeout(() => { swipeHandledRef.current = false }, 450)
-      goToTrack(deltaY < 0 ? 1 : -1)
+    if (start) {
+      const deltaX = event.clientX - start.x
+      const deltaY = event.clientY - start.y
+      if (Math.abs(deltaY) > 48 && Math.abs(deltaY) > Math.abs(deltaX) * 1.25) {
+        swipeHandledRef.current = true
+        window.setTimeout(() => { swipeHandledRef.current = false }, 450)
+        goToTrack(deltaY < 0 ? 1 : -1)
+      }
     }
+    setIsArtworkDragging(false)
+    setArtworkDragDirection(null)
+    const card = event.currentTarget
+    window.requestAnimationFrame(() => {
+      card.parentElement?.querySelectorAll('.carousel-card').forEach((item) => item.style.removeProperty('--drag-y'))
+    })
+  }
+  const cancelArtworkSwipe = (event) => {
+    swipeStartRef.current = null
+    setIsArtworkDragging(false)
+    setArtworkDragDirection(null)
+    const card = event.currentTarget
+    window.requestAnimationFrame(() => {
+      card.parentElement?.querySelectorAll('.carousel-card').forEach((item) => item.style.removeProperty('--drag-y'))
+    })
   }
 
   const filteredTracks = useMemo(() => {
@@ -1728,21 +1801,22 @@ function App() {
         <div className="topbar-tools">
           {!isInstalled && <button className="topbar-tool topbar-tool--install" type="button" onClick={requestAppInstall} aria-label="Install 5AM" title="Install 5AM"><Download size={16} strokeWidth={1.9} aria-hidden="true" /><span>Install</span></button>}
           <button className="topbar-tool" type="button" onClick={() => setShowLibrary((value) => !value)} aria-label={`Open music library, ${libraryBadgeCount} tracks`}><LibraryBig size={18} strokeWidth={1.8} aria-hidden="true" /><span>Library <b>{libraryBadgeCount}</b></span></button>
-          <div ref={volumeControlRef} className={`volume-control ${showVolumeSlider ? 'is-open' : ''}`} onPointerEnter={openVolumeSlider} onPointerLeave={scheduleVolumeSliderClose} onFocus={openVolumeSlider} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) scheduleVolumeSliderClose() }}>
+          <div ref={volumeControlRef} className={`volume-control ${showVolumeSlider ? 'is-open' : ''}`} onPointerEnter={(event) => { if (event.pointerType === 'mouse') openVolumeSlider() }} onPointerLeave={(event) => { if (event.pointerType === 'mouse') scheduleVolumeSliderClose() }} onFocus={() => { if (window.matchMedia('(hover: hover)').matches) openVolumeSlider() }} onBlur={(event) => { if (window.matchMedia('(hover: hover)').matches && !event.currentTarget.contains(event.relatedTarget)) scheduleVolumeSliderClose() }}>
             <button className="topbar-tool volume-control__button" type="button" aria-label={volume === 0 ? 'Unmute audio' : 'Mute audio'} title={volume === 0 ? 'Unmute' : 'Mute'} aria-expanded={showVolumeSlider} onClick={() => { if (volume > 0) { lastAudibleVolumeRef.current = volume; setVolume(0) } else setVolume(lastAudibleVolumeRef.current || 0.82) }}>{volume === 0 ? <VolumeX size={18} strokeWidth={1.8} aria-hidden="true" /> : <Volume2 size={18} strokeWidth={1.8} aria-hidden="true" />}</button>
-            <div className="volume-popover" onPointerEnter={openVolumeSlider}><label className="visually-hidden" htmlFor="topbar-volume">Volume</label><input id="topbar-volume" aria-label="Volume" type="range" min="0" max="1" step="0.01" value={volume} style={{ '--range-progress': `${volume * 100}%` }} onPointerDown={openVolumeSlider} onPointerUp={openVolumeSlider} onChange={(event) => { const value = Number(event.target.value); if (value > 0) lastAudibleVolumeRef.current = value; setVolume(value); if (audioRef.current) audioRef.current.volume = value }} /></div>
+            <div className="volume-popover" onPointerEnter={(event) => { if (event.pointerType === 'mouse') openVolumeSlider() }}><label className="visually-hidden" htmlFor="topbar-volume">Volume</label><input id="topbar-volume" aria-label="Volume" type="range" min="0" max="1" step="0.01" value={volume} style={{ '--range-progress': `${volume * 100}%` }} onPointerDown={(event) => { if (event.pointerType === 'mouse') openVolumeSlider() }} onPointerUp={(event) => { if (event.pointerType === 'mouse') openVolumeSlider() }} onChange={(event) => { const value = Number(event.target.value); if (value > 0) lastAudibleVolumeRef.current = value; setVolume(value); if (audioRef.current) audioRef.current.volume = value }} /></div>
           </div>
         </div>
       </header>
 
       <main className="stage">
-        <section className="track-copy">
+        <section className="track-copy" onClick={() => { if (window.matchMedia('(max-width: 700px)').matches) revealMobileControls() }}>
           <div className={`track-copy__identity ${!current ? 'track-copy__identity--clock' : ''} ${!current && clockNow.getHours() === 5 ? 'track-copy__identity--five-am' : ''} ${trackTextTransition ? 'track-copy__identity--transitioning' : ''}`}>
             {current ? <>
               <div className="track-copy__identity-current" aria-hidden={Boolean(trackTextTransition)}>
                 <h1>{current.title}</h1>
                 <p>{current.artist}</p>
               </div>
+              <button className={`track-copy__like ${currentLiked ? 'is-liked' : ''}`} type="button" aria-label={`${currentLiked ? 'Remove from' : 'Add to'} ${currentLikeCollection} Liked Songs`} aria-pressed={currentLiked} title={`${currentLikeCollection} Liked Songs`} onClick={(event) => { event.stopPropagation(); revealMobileControls(); toggleCurrentLike() }}><Icon name="heart" size={20} fill={currentLiked ? 'currentColor' : 'none'} /></button>
               {trackTextTransition && <div key={trackTextTransition.id} className={`track-copy__motion track-copy__motion--${trackTextTransition.direction}`} aria-hidden="true">
                 <div className="track-copy__motion-layer track-copy__motion-layer--leaving"><h1>{trackTextTransition.from.title}</h1><p>{trackTextTransition.from.artist}</p></div>
                 <div className="track-copy__motion-layer track-copy__motion-layer--entering"><h1>{trackTextTransition.to.title}</h1><p>{trackTextTransition.to.artist}</p></div>
@@ -1752,11 +1826,11 @@ function App() {
               <p>{clockNow.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</p>
             </>}
           </div>
-          {current && <div className="track-progress" onPointerMove={(event) => { const bounds = event.currentTarget.getBoundingClientRect(); const position = Math.min(100, Math.max(0, ((event.clientX - bounds.left) / bounds.width) * 100)); setSeekHover({ position }) }} onPointerLeave={() => setSeekHover(null)}><span className="seek-time-badge" style={{ '--hover-position': `${seekHover?.position ?? (duration ? (currentTime / duration) * 100 : 50)}%` }} aria-hidden="true">{formatTime(currentTime)} / {formatTime(duration)}</span><input aria-label="Seek through track" type="range" min="0" max={duration || 1} value={Math.min(currentTime, duration || 0)} style={{ '--range-progress': `${duration ? (currentTime / duration) * 100 : 0}%` }} onChange={(event) => { const time = Number(event.target.value); if (current?.source === 'spotify') spotifyPlayerRef.current?.seek(time * 1000).catch((error) => setMessage(error.message)); else if (audioRef.current) audioRef.current.currentTime = time; setCurrentTime(time) }} /></div>}
+          {current && <div className={`track-progress ${isPlaying && !mobileControlsVisible ? 'track-progress--hidden' : ''}`} onPointerMove={(event) => { const bounds = event.currentTarget.getBoundingClientRect(); const position = Math.min(100, Math.max(0, ((event.clientX - bounds.left) / bounds.width) * 100)); setSeekHover({ position }) }} onPointerLeave={() => setSeekHover(null)}><span className="seek-time-badge" style={{ '--hover-position': `${seekHover?.position ?? (duration ? (currentTime / duration) * 100 : 50)}%` }} aria-hidden="true">{formatTime(currentTime)} / {formatTime(duration)}</span><input aria-label="Seek through track" type="range" min="0" max={duration || 1} value={Math.min(currentTime, duration || 0)} style={{ '--range-progress': `${duration ? (currentTime / duration) * 100 : 0}%` }} onChange={(event) => { const time = Number(event.target.value); if (current?.source === 'spotify') spotifyPlayerRef.current?.seek(time * 1000).catch((error) => setMessage(error.message)); else if (audioRef.current) audioRef.current.currentTime = time; setCurrentTime(time) }} /></div>}
           {!current && <button className="browse-link" type="button" onClick={() => setShowLibrary(true)}>{tracks.length ? 'Choose a track' : 'Add music to begin'} <ArrowUpRight size={16} aria-hidden="true" /></button>}
         </section>
 
-        <div className={`album-carousel ${isPlaying ? 'album-carousel--playing' : ''}`} onPointerDown={startArtworkSwipe} onPointerUp={endArtworkSwipe} onPointerCancel={() => { swipeStartRef.current = null }} aria-label="Album artwork. Swipe up for next track or down for previous track.">
+        <div className={`album-carousel ${isPlaying ? 'album-carousel--playing' : ''}`} aria-label="Album artwork. Swipe up for next track or down for previous track.">
           <div ref={artworkWrapRef} className={`artwork-wrap ${isPlaying ? 'artwork-wrap--playing' : ''}`} aria-hidden="true" />
           <div className="sound-wave" aria-hidden="true">{Array.from({ length: 19 }, (_, index) => <i key={index} style={{ '--bar': `${14 + ((index * 29 + 31) % 52)}px`, '--delay': `${(index % 7) * -0.16}s` }} />)}</div>
         </div>
@@ -1771,12 +1845,52 @@ function App() {
         </nav>
       </main>
 
-      {artworkCenter && carouselTracks.length > 0 && <div className="artwork-cards" aria-label="Previous, current, and next album artwork">
+      {artworkCenter && carouselTracks.length > 0 && <div className={`artwork-cards ${isViewportResizing ? 'artwork-cards--resizing' : ''}`} aria-label="Previous, current, and next album artwork">
         {carouselTracks.map(({ track, offset, queueIndex }) => {
           const position = offset === 0 ? 'current' : offset === -1 ? 'previous' : offset === 1 ? 'next' : 'buffer'
-          return <button key={`${queueIndex}:${track.id}`} className={`carousel-card carousel-card--${position}`} style={cardPosition(offset)} type="button" tabIndex={position === 'previous' || position === 'next' ? 0 : -1} aria-hidden={position === 'buffer' || undefined} aria-label={position === 'current' ? `Currently playing: ${track.title}` : `Play ${position} track: ${track.title}`} onClick={position === 'previous' ? () => goToTrack(-1, track) : position === 'next' ? () => goToTrack(1, track) : undefined}>
-          <Cover track={track} size="large" className="hero-cover" />
-          </button>
+          const isCurrent = position === 'current'
+          const canSelect = position === 'previous' || position === 'next'
+          return <div key={`${queueIndex}:${track.id}`} className={`carousel-card carousel-card--${position} ${isCurrent && mobileControlsVisible ? 'carousel-card--controls-visible' : ''} ${isCurrent && isArtworkDragging ? 'carousel-card--dragging' : ''} ${(position === 'previous' || position === 'next') && artworkDragDirection ? 'carousel-card--dragging-along' : ''}`} style={cardPosition(offset)} role={isCurrent ? 'group' : canSelect ? 'button' : undefined} tabIndex={canSelect ? 0 : -1} aria-hidden={position === 'buffer' || undefined} aria-label={isCurrent ? `Currently playing: ${track.title}` : canSelect ? `Play ${position} track: ${track.title}` : undefined} onPointerDown={isCurrent ? startArtworkSwipe : undefined} onPointerMove={isCurrent ? moveArtworkSwipe : undefined} onPointerUp={isCurrent ? endArtworkSwipe : undefined} onPointerCancel={isCurrent ? cancelArtworkSwipe : undefined} onKeyDown={canSelect ? (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault()
+              goToTrack(offset < 0 ? -1 : 1, track)
+            }
+          } : undefined} onClick={isCurrent ? (event) => {
+            revealMobileControls()
+            if (swipeHandledRef.current) return
+            const bounds = event.currentTarget.getBoundingClientRect()
+            const x = (event.clientX - bounds.left) / bounds.width
+            const y = (event.clientY - bounds.top) / bounds.height
+            const isCenterTap = x >= .3 && x <= .7 && y >= .3 && y <= .7
+            if (artworkTapTimerRef.current) {
+              window.clearTimeout(artworkTapTimerRef.current)
+              artworkTapTimerRef.current = null
+              const firstTap = artworkTapPositionRef.current
+              artworkTapPositionRef.current = null
+              if (!isCenterTap && firstTap && !firstTap.isCenter) toggleCurrentLike()
+              else if (isCenterTap || firstTap?.isCenter) togglePlayback()
+              return
+            }
+            artworkTapPositionRef.current = { isCenter: isCenterTap }
+            artworkTapTimerRef.current = window.setTimeout(() => {
+              artworkTapTimerRef.current = null
+              const firstTap = artworkTapPositionRef.current
+              artworkTapPositionRef.current = null
+              if (firstTap?.isCenter) togglePlayback()
+            }, 450)
+          } : position === 'previous' ? () => goToTrack(-1, track) : position === 'next' ? () => goToTrack(1, track) : undefined}>
+            <Cover track={track} size="large" className="hero-cover" />
+            {isCurrent && <nav className="mobile-art-controls" aria-label="Playback controls" onClick={(event) => {
+              event.stopPropagation()
+              window.clearTimeout(artworkTapTimerRef.current)
+              artworkTapTimerRef.current = null
+              revealMobileControls()
+            }}>
+              <button className={`rail-button ${shuffle ? 'is-active' : ''}`} type="button" aria-label={shuffle ? 'Disable shuffle' : 'Enable shuffle'} aria-pressed={shuffle} title={shuffle ? 'Shuffle on' : 'Shuffle off'} onClick={toggleShuffle}><Icon name="shuffle" size={20} /></button>
+              <button className={`rail-play ${isPlaying ? 'rail-play--playing' : 'rail-play--paused'}`} type="button" aria-label={isPlaying ? 'Pause' : 'Play'} aria-pressed={isPlaying} title={isPlaying ? 'Pause' : 'Play'} disabled={!current} onClick={togglePlayback}><Icon name={isPlaying ? 'pause' : 'play'} size={24} /></button>
+              <button className={`rail-button ${repeatMode !== 'off' ? 'is-active' : ''}`} type="button" aria-label={`Repeat mode: ${repeatMode === 'off' ? 'off' : repeatMode === 'all' ? 'queue' : 'one song'}`} aria-pressed={repeatMode !== 'off'} title={`Repeat ${repeatMode === 'off' ? 'off' : repeatMode === 'all' ? 'queue — click for one song' : 'one song — click to turn off'}`} onClick={cycleRepeatMode}><Icon name={repeatMode === 'one' ? 'repeatOne' : 'repeat'} size={20} /></button>
+            </nav>}
+          </div>
         })}
       </div>}
 
@@ -1849,7 +1963,7 @@ function App() {
                 : displayTracks.length ? displayTracks.map((track, index) => <TrackRow key={`${track.source}:${track.id}-${track.playlistEntryId || index}`} track={track} index={index} active={isTrackActive(track)} playing={isPlaying} liked={isMixLiked(track)} onPlay={mixMode ? playMixTrack : spotifyMode ? playSpotifyTrack : playLocalTrack} onLike={toggleMixLike} likeScope="mix" onMenu={(item) => setPlaylistDialog({ kind: 'track', track: item })} />)
                   : <div className="drawer-empty"><Icon name="music" size={28} /><p>{mixMode ? (search ? 'No Mix songs found.' : mixView === 'liked' ? 'Like tracks from Local or Spotify to collect them here.' : 'This Mix playlist is empty. Add tracks from Local or Spotify.') : spotifyMode ? (search ? 'No Spotify songs found.' : spotifyCollection === 'liked' ? 'Your Spotify Liked Songs will appear here.' : `No tracks in ${selectedSpotifyPlaylist?.name || 'this playlist'}.`) : search ? 'No songs found.' : tracks.length ? 'Nothing in this collection yet.' : 'Your library is empty.'}</p>{!spotifyMode && !mixMode && <button className="browse-link" type="button" onClick={() => fileInput.current?.click()}>Add music <Plus size={14} aria-hidden="true" /></button>}</div>}
           </div>
-          {!spotifyMode && !mixMode && <><button className="drawer-import" type="button" onClick={() => folderInput.current?.click()}><Icon name="folder" size={17} /> Import folder</button><button className="drawer-clear" type="button" disabled={!tracks.length} onClick={() => setPlaylistDialog({ kind: 'clear' })}><Icon name="close" size={16} /> Remove all songs</button></>}
+          {!spotifyMode && !mixMode && <button className="drawer-import" type="button" onClick={() => folderInput.current?.click()}><Icon name="folder" size={17} /> Import folder</button>}
         </section>
       </div>}
 
