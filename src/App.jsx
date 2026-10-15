@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, ArrowUpRight, AudioWaveform, Check, ChevronDown, ChevronUp, Clock3, Download, Ellipsis, Folder, Headphones, Heart, House, LibraryBig, Music2, Pause, Play, Plus, Repeat1, Repeat2, Search, Settings, Shuffle, Volume2, VolumeX, X } from 'lucide-react'
-import { clearSpotifySession, finishSpotifyLogin, getSpotifyAccessToken, getSpotifyClientId, hasSpotifySession, loadSpotifyPlaybackSdk, normalizeSpotifyTrack, saveSpotifyClientId, spotifyFetch, spotifyRedirectUri, startSpotifyLogin } from './spotify.js'
+import { clearSpotifySession, finishSpotifyLogin, getSpotifyAccessToken, getSpotifyClientId, hasSpotifySession, loadSpotifyPlaybackSdk, normalizeSpotifyTrack, spotifyFetch, startSpotifyLogin } from './spotify.js'
 import { restorePlaybackSession, serializePlaybackSession } from './playback/providers.js'
 import './App.css'
 
@@ -320,7 +320,6 @@ function App() {
   const [playlistDialog, setPlaylistDialog] = useState(null)
   const [playlistName, setPlaylistName] = useState('')
   const [loading, setLoading] = useState(true)
-  const [spotifyClientId, setSpotifyClientId] = useState(getSpotifyClientId())
   const [spotifyConnected, setSpotifyConnected] = useState(hasSpotifySession())
   const [spotifyPlayerReady, setSpotifyPlayerReady] = useState(false)
   const [spotifyMode, setSpotifyMode] = useState(() => {
@@ -346,7 +345,6 @@ function App() {
     const saved = restorePlaybackSession(readPlaybackSession())
     return saved?.provider === 'local' ? saved.context : null
   })
-  const [spotifySetupOpen, setSpotifySetupOpen] = useState(false)
   const [spotifyWorking, setSpotifyWorking] = useState(false)
   const [spotifyPlaylistsLoading, setSpotifyPlaylistsLoading] = useState(false)
   const spotifyPlayerRef = useRef(null)
@@ -1504,20 +1502,8 @@ function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [current, currentTime, duration, volume, togglePlayback, goToTrack])
 
-  const saveSpotifySettings = (event) => {
-    event.preventDefault()
-    const id = saveSpotifyClientId(spotifyClientId)
-    setSpotifyClientId(id)
-    if (!id) { setMessage('Enter your Spotify Client ID first.'); return }
-    setMessage('Client ID saved on this device. Connect Spotify when you’re ready.')
-    setSpotifySetupOpen(false)
-  }
-
   const connectSpotify = async () => {
-    const id = saveSpotifyClientId(spotifyClientId)
-    setSpotifyClientId(id)
-    if (!id) { setSpotifySetupOpen(true); setMessage('Enter the Client ID from your Spotify developer app.'); return }
-    try { await startSpotifyLogin(id) }
+    try { await startSpotifyLogin(getSpotifyClientId()) }
     catch (error) { setMessage(error.message || 'Could not start Spotify sign-in.') }
   }
 
@@ -1911,23 +1897,15 @@ function App() {
           <label className="drawer-search"><Icon name="search" size={17} /><input ref={searchRef} value={search} onChange={(event) => setSearch(event.target.value)} placeholder={spotifyMode ? 'Find a Spotify song or artist' : 'Find a song or artist'} aria-label={spotifyMode ? 'Search Spotify' : 'Search your music'} />{!spotifyMode && !mixMode && <button className="drawer-add" type="button" title="Add music files" onClick={() => fileInput.current?.click()} aria-label="Add music"><Icon name="plus" size={18} /></button>}</label>
           <div className="library-sources" role="tablist" aria-label="Music source">
             <button className={!spotifyMode && !mixMode ? 'is-selected' : ''} type="button" role="tab" aria-selected={!spotifyMode && !mixMode} onClick={() => { setSpotifyMode(false); setMixMode(false); setSearch(''); navigateToView('collections') }}><Icon name="folder" size={16} /> Local</button>
-            <button className={spotifyMode ? 'is-selected' : ''} type="button" role="tab" aria-selected={spotifyMode} onClick={() => { setSpotifyMode(true); setMixMode(false); setSearch(''); setSpotifyCollection('playlists'); setSpotifySetupOpen(!spotifyConnected) }}><Icon name="headphones" size={16} /> Spotify</button>
+            <button className={spotifyMode ? 'is-selected' : ''} type="button" role="tab" aria-selected={spotifyMode} onClick={() => { setSpotifyMode(true); setMixMode(false); setSearch(''); setSpotifyCollection('playlists') }}><Icon name="headphones" size={16} /> Spotify</button>
             <button className={mixMode ? 'is-selected' : ''} type="button" role="tab" aria-selected={mixMode} onClick={() => { setSpotifyMode(false); setMixMode(true); setSearch(''); setMixView('collections') }}><Icon name="shuffle" size={16} /> Mix</button>
           </div>
           {!spotifyMode && !mixMode && <div className="drawer-filters">
           </div>}
           {spotifyMode && <div className="spotify-panel">
-            {spotifyConnected ? <div className="spotify-status"><span><i />{spotifyPlayerReady ? 'Spotify connected' : 'Connecting to Spotify…'}</span><button type="button" onClick={disconnectSpotify}>Disconnect</button></div> : <>
-              <div className="spotify-status"><span>Connect your Premium account</span><button type="button" onClick={() => setSpotifySetupOpen((open) => !open)}>{spotifySetupOpen ? 'Hide setup' : 'Set up'}</button></div>
-              {spotifySetupOpen && <form className="spotify-setup" onSubmit={saveSpotifySettings}>
-                <p>Each user connects their own Spotify developer app. Create one at <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noreferrer">developer.spotify.com/dashboard</a>, select Web API and Web Playback SDK, then add this redirect URI:</p>
-                <code>{spotifyRedirectUri()}</code>
-                <label htmlFor="spotify-client-id">Client ID</label>
-                <input id="spotify-client-id" value={spotifyClientId} onChange={(event) => setSpotifyClientId(event.target.value)} placeholder="Paste your Spotify Client ID" autoComplete="off" />
-                <p className="spotify-setup__hint">Use the Client ID only. Never enter a Client Secret. Your account needs Spotify Premium.</p>
-                <div><button className="button button--ghost" type="submit">Save ID</button><button className="button button--accent" type="button" onClick={connectSpotify}>Save &amp; connect</button></div>
-              </form>}
-            </>}
+            {spotifyConnected
+              ? <div className="spotify-status"><span><i />{spotifyPlayerReady ? 'Spotify connected' : 'Connecting to Spotify…'}</span><button type="button" onClick={disconnectSpotify}>Disconnect</button></div>
+              : <div className="spotify-status"><span>Connect your Premium account</span><button type="button" onClick={connectSpotify}>Connect Spotify</button></div>}
           </div>}
           {!spotifyMode && !mixMode && ((view !== 'home' && view !== 'collections') || search.trim()) && <button className="spotify-back" type="button" onClick={() => { setSearch(''); navigateToView('collections') }}><ArrowLeft size={15} /> All collections</button>}
           {mixMode && mixView !== 'collections' && !search.trim() && <button className="spotify-back" type="button" onClick={() => { setSearch(''); setMixView('collections') }}><ArrowLeft size={15} /> All Mix playlists</button>}
@@ -1939,7 +1917,7 @@ function App() {
               ? previous
               : { top: scrollTop, height: clientHeight })
           }}>
-            {spotifyMode && !spotifyConnected ? <div className="drawer-empty"><Icon name="headphones" size={28} /><p>Connect Spotify to search and play music from your account.</p><button className="browse-link" type="button" onClick={() => setSpotifySetupOpen(true)}>Set up Spotify <ArrowUpRight size={14} /></button></div>
+            {spotifyMode && !spotifyConnected ? <div className="drawer-empty"><Icon name="headphones" size={28} /><p>Sign in with your Spotify Premium account to browse and play your music.</p><button className="browse-link" type="button" onClick={connectSpotify}>Connect Spotify <ArrowUpRight size={14} /></button></div>
               : mixMode && mixView === 'collections' && !search.trim() ? <div className="local-collections" aria-label="Mix playlists">
                 <button className="local-collection" type="button" onClick={() => setMixView('liked')}><span className="local-collection__cover local-collection__cover--favorites"><Icon name="heart" size={19} fill="currentColor" /></span><span><b>Liked Songs</b><small>{mixLikedTracks.length} {mixLikedTracks.length === 1 ? 'track' : 'tracks'} from all sources</small></span></button>
                 {mixPlaylists.map((playlist) => <button className="local-collection" key={playlist.id} type="button" onClick={() => setMixView(`playlist:${playlist.id}`)}><span className="local-collection__cover"><Icon name="shuffle" size={19} /></span><span><b>{playlist.name}</b><small>{playlist.entries.length} {playlist.entries.length === 1 ? 'track' : 'tracks'}</small></span></button>)}

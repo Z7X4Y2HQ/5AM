@@ -32,6 +32,8 @@ jobs:
         run: npm ci
       - name: Build
         run: npm run build
+        env:
+          VITE_SPOTIFY_CLIENT_ID: 80f1848a5d5248d5882035f84a699bc9
       - name: Configure Pages
         uses: actions/configure-pages@v5
       - name: Upload build output

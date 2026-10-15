@@ -34,7 +34,7 @@ export function getSpotifyClientId() {
     window.localStorage.setItem(CLIENT_ID_KEY, migratedId)
     window.history.replaceState({}, '', `${window.location.pathname}${window.location.search}`)
   }
-  return window.localStorage.getItem(CLIENT_ID_KEY) || import.meta.env.VITE_SPOTIFY_CLIENT_ID || ''
+  return import.meta.env.VITE_SPOTIFY_CLIENT_ID || window.localStorage.getItem(CLIENT_ID_KEY) || ''
 }
 
 export function saveSpotifyClientId(value) {
@@ -53,7 +53,7 @@ async function sha256(value) {
 }
 
 export async function startSpotifyLogin(clientId) {
-  if (!clientId) throw new Error('Add your Spotify Client ID first.')
+  if (!clientId) throw new Error('Spotify sign-in is not configured for this app yet.')
   const verifier = base64Url(crypto.getRandomValues(new Uint8Array(64)))
   const challenge = base64Url(await sha256(verifier))
   const state = base64Url(crypto.getRandomValues(new Uint8Array(16)))
