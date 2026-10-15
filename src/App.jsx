@@ -344,6 +344,7 @@ function App() {
   const spotifyOffsetRef = useRef(0)
   const spotifyDeviceIdRef = useRef('')
   const spotifyDeviceActivationRef = useRef(null)
+  const spotifyLoginCompletedRef = useRef(false)
   const spotifyHandledEndRef = useRef('')
   const spotifyEndCheckRef = useRef('')
   const spotifyObservedStateRef = useRef(null)
@@ -366,6 +367,7 @@ function App() {
   const fileInput = useRef(null)
   const folderInput = useRef(null)
   const audioRef = useRef(null)
+  const localAudioTrackIdRef = useRef(null)
   const pendingLocalSeekRef = useRef(0)
   const volumeRef = useRef(volume)
   const searchRef = useRef(null)
@@ -373,58 +375,6 @@ function App() {
   const swipeHandledRef = useRef(false)
   const artworkWrapRef = useRef(null)
   const spotifyPlaylistsRef = useRef([])
-  const localAudioSourceRef = useRef(null)
-  const localPlayAttemptRef = useRef(null)
-
-  const prepareLocalAudio = (track) => {
-    const audio = audioRef.current
-    if (!audio || !track?.blob) return null
-    let source = localAudioSourceRef.current
-    if (source?.trackId !== track.id || source.blob !== track.blob) {
-      const previousSource = source
-      source = { trackId: track.id, blob: track.blob, url: URL.createObjectURL(track.blob) }
-      audio.pause()
-      audio.src = source.url
-      audio.load()
-      localAudioSourceRef.current = source
-      if (previousSource?.url) URL.revokeObjectURL(previousSource.url)
-    } else if (audio.src !== source.url) {
-      audio.src = source.url
-      audio.load()
-    }
-    return audio
-  }
-
-  const startLocalAudio = (track, restart = false) => {
-    const audio = prepareLocalAudio(track)
-    if (!audio) {
-      setIsPlaying(false)
-      setMessage('This local track is no longer available. Reimport its folder to play it.')
-      return
-    }
-    audio.volume = volumeRef.current
-    if (restart) audio.currentTime = 0
-    const attempt = { trackId: track.id }
-    localPlayAttemptRef.current = attempt
-    audio.play().then(() => {
-      if (localPlayAttemptRef.current === attempt) localPlayAttemptRef.current = null
-    }).catch((error) => {
-      if (localPlayAttemptRef.current === attempt) localPlayAttemptRef.current = null
-      if (error?.name === 'AbortError') return
-      setIsPlaying(false)
-      setMessage(error?.name === 'NotAllowedError'
-        ? 'Playback was blocked by your browser. Press play to continue.'
-        : `This local track could not play (${error?.name || 'media error'}).`)
-    })
-  }
-
-  useEffect(() => () => {
-    const source = localAudioSourceRef.current
-    if (!source) return
-    audioRef.current?.pause()
-    URL.revokeObjectURL(source.url)
-    localAudioSourceRef.current = null
-  }, [])
 
   useEffect(() => {
     const handleInstallPrompt = (event) => {
@@ -542,8 +492,10 @@ function App() {
         setIsPlaying(false)
         pendingLocalSeekRef.current = restored.position
         if (playbackContext?.type === 'mix') {
-          setSpotifyMode(false)
-          setMixMode(true)
+          if (!spotifyLoginCompletedRef.current) {
+            setSpotifyMode(false)
+            setMixMode(true)
+          }
           setMixView(playbackContext.id ? `playlist:${playbackContext.id}` : playbackContext.name === 'Liked Songs' ? 'liked' : 'collections')
         } else if (restored.context?.type === 'playlist' && savedPlaylists.some((playlist) => playlist.id === restored.context.id)) {
           setView(`playlist:${restored.context.id}`)
@@ -568,8 +520,10 @@ function App() {
     let active = true
     finishSpotifyLogin().then((completed) => {
       if (completed && active) {
+        spotifyLoginCompletedRef.current = true
         setSpotifyConnected(true)
         setSpotifyMode(true)
+        setMixMode(false)
         setSpotifyCollection('playlists')
         setShowLibrary(true)
         setMessage('Spotify connected. Loading your player…')
@@ -595,6 +549,7 @@ function App() {
       player.addListener('ready', ({ device_id: deviceId }) => {
         spotifyDeviceIdRef.current = deviceId
         spotifyHandledEndRef.current = ''
+        spotifyObservedStateRef.current = null
         setSpotifyPlayerReady(false)
         const promise = (async () => {
           let lastError
@@ -632,13 +587,13 @@ function App() {
         const activeTrack = state.track_window?.current_track
         if (activeTrack) {
           const track = normalizeSpotifyTrack(activeTrack)
-          const previousObservedState = spotifyObservedStateRef.current
+          const previousState = spotifyObservedStateRef.current
           const eventPosition = state.position || 0
           const endedPositionReset = state.paused
-            && previousObservedState?.id === track.id
-            && previousObservedState.duration === (state.duration || 0)
-            && previousObservedState.position >= (state.duration || 0) - 1500
-            && eventPosition < previousObservedState.position
+            && previousState?.id === track.id
+            && previousState.duration === (state.duration || 0)
+            && previousState.position >= (state.duration || 0) - 1500
+            && eventPosition < previousState.position
           if (!endedPositionReset) {
             spotifyObservedStateRef.current = {
               id: track.id,
@@ -649,15 +604,31 @@ function App() {
           }
           const expected = expectedSpotifyTrackRef.current
           const requestedTrack = expected?.id === track.id && expected.expiresAt > Date.now()
+          const savedSession = readPlaybackSession()
+          const requestedContext = requestedTrack ? expected.context : null
+          const isMixPlayback = requestedContext?.type === 'mix' || savedSession?.context?.type === 'mix'
+          const appCurrentTrack = currentTrackRef.current
+          const observedCurrent = spotifyObservedStateRef.current
+          const currentTrackWasAtEnd = observedCurrent?.id === appCurrentTrack?.id
+            && observedCurrent.duration > 0
+            && observedCurrent.position >= observedCurrent.duration - 1500
+          if (isMixPlayback && appCurrentTrack?.source === 'spotify' && appCurrentTrack.id !== track.id
+            && currentTrackWasAtEnd && !requestedTrack) {
+            if (expected?.id === 'local') return
+            const actions = spotifyQueueActionsRef.current
+            if (actions?.current?.id === appCurrentTrack.id && actions.repeatMode !== 'one' && spotifyHandledEndRef.current !== appCurrentTrack.id) {
+              spotifyHandledEndRef.current = appCurrentTrack.id
+              actions.goToTrack(1)
+            }
+            return
+          }
           if (currentTrackRef.current?.source !== 'spotify' && !requestedTrack) return
           if (spotifyHandledEndRef.current && spotifyHandledEndRef.current !== track.id) spotifyHandledEndRef.current = ''
           if (!state.paused && state.position < 3000 && spotifyHandledEndRef.current === track.id) spotifyHandledEndRef.current = ''
           if (expected && expected.expiresAt > Date.now()) {
             if (expected.id === 'local' || track.id !== expected.id) return
           }
-          const requestedContext = expected?.id === track.id && expected.expiresAt > Date.now() ? expected.context : null
           const contextUri = state.context?.uri || ''
-          const savedSession = readPlaybackSession()
           const savedContextMatchesTrack = savedSession?.source === 'spotify'
             && (savedSession.trackId === track.id || savedSession.queue?.some((item) => item.id === track.id))
           let playbackContext = requestedContext
@@ -702,12 +673,10 @@ function App() {
       spotifyDeviceActivationRef.current = null
       spotifyHandledEndRef.current = ''
       spotifyEndCheckRef.current = ''
+      spotifyObservedStateRef.current = null
     }
   }, [spotifyConnected])
 
-  // Spotify documents player_state_changed as an event that can arrive at random
-  // intervals. Poll the SDK near the end of the current track so a missed final
-  // state event cannot leave playback stopped at the end of a playlist.
   useEffect(() => {
     if (current?.source !== 'spotify' || !spotifyPlayerReady) return undefined
     const player = spotifyPlayerRef.current
@@ -717,29 +686,81 @@ function App() {
     let endCheckTimer = 0
     let polling = false
 
+    const advanceQueueAtEnd = async (trackId) => {
+      const actions = spotifyQueueActionsRef.current
+      if (spotifyHandledEndRef.current === trackId || actions?.current?.id !== trackId || actions.repeatMode === 'one') return
+      spotifyHandledEndRef.current = trackId
+      if (actions.repeatMode === 'all' && actions.queue.length === 1) {
+        await player.seek(0)
+        await player.resume()
+      } else {
+        actions.goToTrack(1)
+      }
+    }
+
     const checkEnd = async () => {
       if (disposed || polling) return
       polling = true
       try {
         const state = await player.getCurrentState()
-        if (disposed || !state) return
+        if (disposed) return
+        if (!state) {
+          const observed = spotifyObservedStateRef.current
+          if (observed?.id !== current.id || observed.duration <= 0 || observed.position < observed.duration - 1200
+            || pendingTrackId === current.id || spotifyHandledEndRef.current === current.id) return
+          pendingTrackId = current.id
+          spotifyEndCheckRef.current = current.id
+          endCheckTimer = window.setTimeout(async () => {
+            pendingTrackId = ''
+            if (spotifyEndCheckRef.current === current.id) spotifyEndCheckRef.current = ''
+            try {
+              const latest = await player.getCurrentState()
+              if (disposed || latest) return
+              const latestObserved = spotifyObservedStateRef.current
+              if (latestObserved?.id === current.id && latestObserved.duration > 0 && latestObserved.position >= latestObserved.duration - 1200) {
+                await advanceQueueAtEnd(current.id)
+              }
+            } catch (error) {
+              if (!disposed) setMessage(error.message || 'Spotify could not start the next track.')
+            }
+          }, 850)
+          return
+        }
         const sdkTrack = state.track_window?.current_track
         if (!sdkTrack) return
         const trackId = `spotify:${sdkTrack.id}`
         const duration = state.duration || 0
         const position = state.position || 0
-        if (trackId !== current.id) return
+        if (trackId !== current.id) {
+          const actions = spotifyQueueActionsRef.current
+          const expected = expectedSpotifyTrackRef.current
+          const isExpectedTrack = expected?.id === trackId && expected.expiresAt > Date.now()
+          const observedCurrent = spotifyObservedStateRef.current
+          const currentTrackWasAtEnd = observedCurrent?.id === current.id
+            && observedCurrent.duration > 0
+            && observedCurrent.position >= observedCurrent.duration - 1500
+          if (!isExpectedTrack && expected?.id !== 'local' && readPlaybackSession()?.context?.type === 'mix'
+            && actions?.current?.id === current.id && current.source === 'spotify'
+            && currentTrackWasAtEnd && actions.repeatMode !== 'one' && spotifyHandledEndRef.current !== current.id) {
+            spotifyHandledEndRef.current = current.id
+            actions.goToTrack(1)
+          }
+          return
+        }
         const previousState = spotifyObservedStateRef.current
         spotifyObservedStateRef.current = { id: trackId, position, duration, paused: state.paused }
         setCurrentTime(position / 1000)
         if (duration > 0) setDuration(duration / 1000)
         setIsPlaying(!state.paused)
-        const positionBeforeEnd = previousState?.id === trackId && previousState.duration === duration
-          ? previousState.position
-          : 0
+        const endedAfterProgress = previousState?.id === trackId
+          && previousState.duration === duration
+          && !previousState.paused
+          && previousState.position >= duration - 1500
+          && state.paused
         const atEnd = duration > 0 && (
           position >= duration - 1200
-          || (state.paused && previousState?.id === trackId && !previousState.paused && positionBeforeEnd >= duration - 1500)
+          || endedAfterProgress
+          || (state.paused && previousState?.id === trackId && previousState.position >= duration - 1500)
         )
         if (!atEnd || pendingTrackId === trackId || spotifyHandledEndRef.current === trackId) return
 
@@ -751,23 +772,21 @@ function App() {
           try {
             const latest = await player.getCurrentState()
             const latestTrack = latest?.track_window?.current_track
-            if (disposed || !latest || `spotify:${latestTrack?.id}` !== trackId) return
+            if (disposed) return
             const observed = spotifyObservedStateRef.current
-            const stillAtEnd = latest.duration > 0 && (
-              latest.position >= latest.duration - 1200
-              || (latest.paused && observed?.id === trackId && observed.duration === latest.duration && observed.position >= latest.duration - 1500)
-            )
+            const latestMatchesTrack = latest && `spotify:${latestTrack?.id}` === trackId
+            if (latest && !latestMatchesTrack) return
+            const latestNearEnd = latest?.duration > 0
+              && (latest.position >= latest.duration - 1200
+                || (latest.paused && observed?.id === trackId && observed.duration === latest.duration && observed.position >= latest.duration - 1500))
+            const endedStateDisappeared = !latest
+              && observed?.id === trackId
+              && observed.duration > 0
+              && observed.position >= observed.duration - 1200
+            const stillAtEnd = latestNearEnd || endedStateDisappeared
             if (!stillAtEnd) return
 
-            const actions = spotifyQueueActionsRef.current
-            if (spotifyHandledEndRef.current === trackId || actions?.current?.id !== trackId || actions.repeatMode === 'one') return
-            spotifyHandledEndRef.current = trackId
-            if (actions.repeatMode === 'all' && actions.queue.length === 1) {
-              await player.seek(0)
-              await player.resume()
-            } else {
-              actions.goToTrack(1)
-            }
+            await advanceQueueAtEnd(trackId)
           } catch (error) {
             if (!disposed) setMessage(error.message || 'Spotify could not start the next track.')
           }
@@ -915,13 +934,23 @@ function App() {
 
   useEffect(() => {
     const audio = audioRef.current
-    if (!audio || !current) return undefined
-    if (current.source === 'spotify') {
+    if (!audio) return undefined
+    if (current?.source !== 'local' || !current.blob) {
+      localAudioTrackIdRef.current = null
       audio.pause()
+      audio.removeAttribute('src')
+      audio.load()
       return undefined
     }
-    prepareLocalAudio(current)
-  }, [current?.id, current?.source, current?.blob])
+    const source = URL.createObjectURL(current.blob)
+    localAudioTrackIdRef.current = current.id
+    audio.src = source
+    audio.load()
+    return () => {
+      if (localAudioTrackIdRef.current === current.id) localAudioTrackIdRef.current = null
+      URL.revokeObjectURL(source)
+    }
+  }, [current?.id])
 
   useEffect(() => {
     const audio = audioRef.current
@@ -930,7 +959,10 @@ function App() {
     let frame = 0
     if (isPlaying) {
       audio.volume = volumeRef.current
-      if (audio.paused && localPlayAttemptRef.current?.trackId !== current.id) startLocalAudio(current)
+      audio.play().catch(() => {
+        setIsPlaying(false)
+        setMessage('This file could not be played by your browser.')
+      })
     } else if (!audio.paused) {
       const startVolume = audio.volume
       const startTime = performance.now()
@@ -1145,7 +1177,6 @@ function App() {
     setIsPlaying(true)
     setCurrentTime(0)
     setDuration(0)
-    if (track.source === 'local') startLocalAudio(track, true)
     if (track.source === 'spotify') {
       const context = sourceContext || { type: 'album', name: track.album, total: track.albumTrackCount }
       expectSpotifyTrack(track.id, context)
@@ -1168,7 +1199,10 @@ function App() {
     if (track === current) {
       setCurrentTime(0)
       setIsPlaying(true)
-      if (track.source === 'local') startLocalAudio(track, true)
+      if (track.source === 'local' && audioRef.current) {
+        audioRef.current.currentTime = 0
+        audioRef.current.play().catch(() => setMessage('This file could not be played by your browser.'))
+      }
       return
     }
     if (current && track.id !== current.id) {
@@ -1191,7 +1225,6 @@ function App() {
     setIsPlaying(true)
     setCurrentTime(0)
     setDuration(0)
-    if (track.source === 'local') startLocalAudio(track, true)
     if (track.source === 'spotify') {
       expectSpotifyTrack(track.id, mixedContext || spotifyPlaybackContext)
       const activation = spotifyDeviceActivationRef.current
@@ -1552,7 +1585,7 @@ function App() {
       setCurrentTime(0)
       if (audioRef.current) {
         audioRef.current.currentTime = 0
-        startLocalAudio(current)
+        audioRef.current.play().catch(() => setMessage('This file could not be played by your browser.'))
       }
       return
     }
@@ -1738,7 +1771,12 @@ function App() {
           setCurrentTime(audio.currentTime)
           pendingLocalSeekRef.current = 0
         }
-      }} onEnded={onEnded} onError={() => { if (current) setMessage('This audio format could not be played in your browser.') }} />
+      }} onEnded={onEnded} onError={() => {
+        if (current?.source === 'local' && localAudioTrackIdRef.current === current.id) {
+          setIsPlaying(false)
+          setMessage('This audio format could not be played in your browser.')
+        }
+      }} />
       {adding && <div className="import-progress"><span className="loader loader--small" /> Adding music…</div>}
       {isDragging && <div className="drop-overlay"><div><Icon name="plus" size={28} /><strong>Drop your music here</strong><span>Audio files will be added to your library</span></div></div>}
       {message && <div className="toast" role="status"><span className="toast__mark"><Icon name="check" size={15} /></span>{message}<button className="icon-button" type="button" aria-label="Dismiss message" onClick={() => setMessage('')}><Icon name="close" size={15} /></button></div>}
