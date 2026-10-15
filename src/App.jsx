@@ -459,7 +459,29 @@ function App() {
 
   useEffect(() => {
     Promise.all([readStore('tracks'), readStore('playlists'), readStore('mixPlaylists'), readStore('mixLikes')])
-      .then(async ([savedTracks, savedPlaylists, savedMixPlaylists, savedMixLikes]) => {
+      .then(async ([rawTracks, savedPlaylists, rawMixPlaylists, rawMixLikes]) => {
+        const fixTrack = (track) => track.source ? track : { ...track, source: 'local', playbackProvider: 'local' }
+        const fixEntry = (entry) => {
+          if (entry.source) return entry
+          const source = entry.snapshot?.spotifyUri ? 'spotify' : 'local'
+          return { ...entry, source, snapshot: entry.snapshot ? { ...entry.snapshot, source } : entry.snapshot }
+        }
+        const savedTracks = rawTracks.map(fixTrack)
+        await Promise.all(rawTracks.filter((track) => !track.source).map((track) => writeStore('tracks', fixTrack(track))))
+        const savedMixPlaylists = rawMixPlaylists.map((playlist) => (playlist.entries || []).some((entry) => !entry.source)
+          ? { ...playlist, entries: playlist.entries.map(fixEntry) }
+          : playlist)
+        await Promise.all(savedMixPlaylists.filter((playlist, index) => playlist !== rawMixPlaylists[index]).map((playlist) => writeStore('mixPlaylists', playlist)))
+        const staleLikes = rawMixLikes.filter((entry) => !entry.source)
+        await Promise.all(staleLikes.map((entry) => removeStoreItem('mixLikes', entry.id)))
+        const likesById = new Map()
+        for (const entry of rawMixLikes) {
+          const fixed = entry.source ? entry : { ...fixEntry(entry) }
+          if (!entry.source) fixed.id = `${fixed.source}:${fixed.trackId}`
+          likesById.set(fixed.id, fixed)
+        }
+        const savedMixLikes = [...likesById.values()]
+        await Promise.all(savedMixLikes.filter((entry) => staleLikes.some((stale) => `${entry.source}:${entry.trackId}` === entry.id && stale.trackId === entry.trackId)).map((entry) => writeStore('mixLikes', entry)))
         const existingMixLikeIds = new Set(savedMixLikes.map((entry) => entry.id))
         const legacyLocalLikes = savedTracks.filter((track) => track.liked)
         const migratedMixLikes = legacyLocalLikes
@@ -584,6 +606,7 @@ function App() {
       })
       player.addListener('player_state_changed', (state) => {
         if (!state) return
+        console.log('[5am] spotify state', { track: state.track_window?.current_track?.id, paused: state.paused, position: state.position, duration: state.duration, appCurrent: currentTrackRef.current?.id, appSource: currentTrackRef.current?.source, expected: expectedSpotifyTrackRef.current?.id })
         const activeTrack = state.track_window?.current_track
         if (activeTrack) {
           const track = normalizeSpotifyTrack(activeTrack)
@@ -618,6 +641,7 @@ function App() {
             const actions = spotifyQueueActionsRef.current
             if (actions?.current?.id === appCurrentTrack.id && actions.repeatMode !== 'one' && spotifyHandledEndRef.current !== appCurrentTrack.id) {
               spotifyHandledEndRef.current = appCurrentTrack.id
+              console.log('[5am] mix end via state_changed')
               actions.goToTrack(1)
             }
             return
@@ -650,12 +674,15 @@ function App() {
           const contextName = ['playlist', 'liked'].includes(playbackContext.type) ? playbackContext.name : playbackContext.name || track.album || 'Spotify'
           setSpotifyPlaybackContext(playbackContext)
           setQueueLabel(contextName)
+          console.log('[5am] spotify state ACCEPTED, may overwrite current', track.id)
           setCurrent((existing) => existing?.id === track.id ? existing : track)
           setDuration(state.duration / 1000 || track.duration || 0)
           setCurrentTime(state.position / 1000 || 0)
           setIsPlaying(!state.paused)
-          setQueue((existing) => existing.some((item) => item.id === track.id) ? existing : [track])
-          setQueueOrder((existing) => existing.some((item) => item.id === track.id) ? existing : [track])
+          if (playbackContext.type !== 'mix') {
+            setQueue((existing) => existing.some((item) => item.id === track.id) ? existing : [track])
+            setQueueOrder((existing) => existing.some((item) => item.id === track.id) ? existing : [track])
+          }
         }
       })
       player.addListener('initialization_error', ({ message: error }) => setMessage(`Spotify player: ${error}`))
@@ -688,6 +715,7 @@ function App() {
 
     const advanceQueueAtEnd = async (trackId) => {
       const actions = spotifyQueueActionsRef.current
+      console.log('[5am] advanceQueueAtEnd', { trackId, current: actions?.current?.id })
       if (spotifyHandledEndRef.current === trackId || actions?.current?.id !== trackId || actions.repeatMode === 'one') return
       spotifyHandledEndRef.current = trackId
       if (actions.repeatMode === 'all' && actions.queue.length === 1) {
@@ -743,6 +771,7 @@ function App() {
             && actions?.current?.id === current.id && current.source === 'spotify'
             && currentTrackWasAtEnd && actions.repeatMode !== 'one' && spotifyHandledEndRef.current !== current.id) {
             spotifyHandledEndRef.current = current.id
+            console.log('[5am] mix end via poll')
             actions.goToTrack(1)
           }
           return
@@ -939,12 +968,17 @@ function App() {
       localAudioTrackIdRef.current = null
       audio.pause()
       audio.removeAttribute('src')
+      console.log('[5am] audio src cleared', current?.id, current?.source)
       audio.load()
       return undefined
     }
-    const source = URL.createObjectURL(current.blob)
+    const playableBlob = current.blob.type
+      ? current.blob
+      : new Blob([current.blob], { type: current.type || 'audio/mpeg' })
+    const source = URL.createObjectURL(playableBlob)
     localAudioTrackIdRef.current = current.id
     audio.src = source
+    console.log('[5am] audio src set', { id: current.id, blobType: playableBlob.type, size: playableBlob.size })
     audio.load()
     return () => {
       if (localAudioTrackIdRef.current === current.id) localAudioTrackIdRef.current = null
@@ -955,13 +989,18 @@ function App() {
   useEffect(() => {
     const audio = audioRef.current
     if (!audio || !current) return
+    console.log('[5am] play effect', { isPlaying, id: current?.id, source: current?.source })
     if (current.source === 'spotify') { audio.pause(); return undefined }
     let frame = 0
     if (isPlaying) {
       audio.volume = volumeRef.current
-      audio.play().catch(() => {
+      audio.play().catch((error) => {
+        if (error?.name === 'AbortError') { console.warn('[5am] play() aborted', current?.id); return }
+        console.error('local audio play() failed', error?.name, error?.message, current)
         setIsPlaying(false)
-        setMessage('This file could not be played by your browser.')
+        setMessage(error?.name === 'NotAllowedError'
+          ? 'Tap play to continue with this local track.'
+          : 'This file could not be played by your browser.')
       })
     } else if (!audio.paused) {
       const startVolume = audio.volume
@@ -975,6 +1014,27 @@ function App() {
       frame = requestAnimationFrame(fadeDown)
     }
     return () => { if (frame) cancelAnimationFrame(frame) }
+  }, [isPlaying, current?.id])
+
+  useEffect(() => {
+    const audio = audioRef.current
+    if (!audio) return undefined
+    const originalPause = audio.pause.bind(audio)
+    const originalLoad = audio.load.bind(audio)
+    audio.pause = () => { console.trace('[5am] audio.pause() called'); return originalPause() }
+    audio.load = () => { console.trace('[5am] audio.load() called'); return originalLoad() }
+    const eventTypes = ['loadstart', 'loadedmetadata', 'canplay', 'playing', 'pause', 'emptied', 'stalled', 'abort', 'error', 'ended']
+    const logAudioEvent = (event) => console.log('[5am] audio event', event.type, { readyState: audio.readyState, networkState: audio.networkState, paused: audio.paused, currentTime: audio.currentTime, hasSrc: Boolean(audio.getAttribute('src')) })
+    eventTypes.forEach((eventType) => audio.addEventListener(eventType, logAudioEvent))
+    return () => {
+      eventTypes.forEach((eventType) => audio.removeEventListener(eventType, logAudioEvent))
+      audio.pause = originalPause
+      audio.load = originalLoad
+    }
+  }, [])
+
+  useEffect(() => {
+    console.log('[5am] state', { current: current?.id, source: current?.source, isPlaying })
   }, [isPlaying, current?.id])
 
   useEffect(() => {
@@ -1064,10 +1124,16 @@ function App() {
   }, [tracks, playlists, view, search])
 
   const resolveMixEntry = (entry) => {
-    const providerTracks = { local: tracks, spotify: spotifyTracks }
-    const available = providerTracks[entry.source] || []
-    const track = available.find((item) => item.id === entry.trackId) || (entry.source === 'local' ? null : entry.snapshot)
-    return track ? { ...track, playlistEntryId: entry.id } : null
+    const source = entry.source === 'spotify' || entry.snapshot?.spotifyUri ? 'spotify' : 'local'
+    const available = source === 'spotify' ? spotifyTracks : tracks
+    const track = available.find((item) => item.id === entry.trackId) || (source === 'local' ? null : entry.snapshot)
+    if (!track) return null
+    return {
+      ...track,
+      source,
+      ...(source === 'local' ? { playbackProvider: 'local' } : {}),
+      playlistEntryId: entry.id,
+    }
   }
   const mixLikedTracks = []
   mixLikes.forEach((entry) => {
@@ -1143,6 +1209,13 @@ function App() {
   }
 
   const playTrack = useCallback((track, source = filteredTracks, sourceLabel, sourceContext = null) => {
+    const unlockAudio = audioRef.current
+    if (unlockAudio && track?.source === 'spotify' && unlockAudio.paused && !unlockAudio.getAttribute('src')) {
+      unlockAudio.muted = true
+      unlockAudio.play().catch(() => {})
+      unlockAudio.pause()
+      unlockAudio.muted = false
+    }
     if (track?.source === 'spotify' && track.playable === false) {
       setMessage('This track is unavailable in your Spotify market.')
       return
@@ -1194,8 +1267,19 @@ function App() {
     }
   }, [filteredTracks, tracks, view, playlists, shuffle, current, repeatMode, spotifyPlaybackContext, localPlaybackContext])
 
-  const animateToTrack = useCallback((track, direction = 1) => {
-    if (!track) return
+  const animateToTrack = useCallback((requested, direction = 1) => {
+    if (!requested) return
+    let track = requested
+    if (requested.source !== 'spotify' && !requested.blob) {
+      const stored = tracks.find((item) => item.id === requested.id)
+      console.log('[5am] repairing blob-less track', requested.id, 'found in library:', Boolean(stored))
+      if (stored) track = { ...stored, source: 'local', playbackProvider: 'local', playlistEntryId: requested.playlistEntryId }
+    }
+    if (track.source !== 'spotify' && !track.blob) {
+      setMessage(`"${track.title}" is missing from your local library.`)
+      return
+    }
+    console.log('[5am] animateToTrack', { from: current?.id, fromSource: current?.source, to: track.id, toSource: track.source, hasBlob: Boolean(track.blob), blobType: track.blob?.type, blobSize: track.blob?.size, sameAsCurrent: track === current })
     if (track === current) {
       setCurrentTime(0)
       setIsPlaying(true)
@@ -1239,16 +1323,23 @@ function App() {
       spotifyFetch('/me/player/repeat?state=off', { method: 'PUT' }).catch(() => {})
       spotifyPlayerRef.current?.pause().catch(() => spotifyFetch('/me/player/pause', { method: 'PUT' }).catch(() => {}))
     }
-  }, [current, repeatMode, spotifyPlaybackContext, localPlaybackContext])
+  }, [current, repeatMode, spotifyPlaybackContext, localPlaybackContext, tracks])
 
   const goToTrack = useCallback((direction, selectedTrack) => {
-    if (!queue.length || currentIndex < 0) return
+    if (!queue.length || currentIndex < 0) {
+      console.log('[5am] goToTrack early return', { queueLength: queue.length, currentIndex })
+      return
+    }
+    console.log('[5am] goToTrack', { direction, currentIndex, queueLength: queue.length, next: queue[currentIndex + direction]?.id, nextSource: queue[currentIndex + direction]?.source, repeatMode })
     if (selectedTrack) { animateToTrack(selectedTrack, direction); return }
     const nextIndex = currentIndex + direction
     if (nextIndex < 0) { animateToTrack(queue[0], direction); return }
     if (nextIndex >= queue.length) {
       if (repeatMode !== 'off') animateToTrack(queue[0], direction)
-      else setIsPlaying(false)
+      else {
+        console.trace('[5am] setIsPlaying(false) from goToTrack end of queue')
+        setIsPlaying(false)
+      }
       return
     }
     animateToTrack(queue[nextIndex], direction)
@@ -1771,7 +1862,10 @@ function App() {
           setCurrentTime(audio.currentTime)
           pendingLocalSeekRef.current = 0
         }
-      }} onEnded={onEnded} onError={() => {
+      }} onEnded={onEnded} onError={(event) => {
+        const audio = event.currentTarget
+        if (!audio.getAttribute('src')) return
+        console.error('audio element error', audio.error?.code, audio.error?.message, current)
         if (current?.source === 'local' && localAudioTrackIdRef.current === current.id) {
           setIsPlaying(false)
           setMessage('This audio format could not be played in your browser.')
