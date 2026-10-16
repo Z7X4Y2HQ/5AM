@@ -242,11 +242,11 @@ function Cover({ track, size = 'normal', className = '' }) {
   )
 }
 
-function TrackRow({ track, index, active, playing, liked, onPlay, onLike, onMenu, likeScope = 'source' }) {
+function TrackRow({ track, index, active, playing, liked, onPlay, onTogglePlayback, onLike, onMenu, likeScope = 'source' }) {
   const unavailable = track.source === 'spotify' && track.playable === false
   return (
-    <div className={`track-row ${active ? 'track-row--active' : ''} ${unavailable ? 'track-row--unavailable' : ''}`} title={unavailable ? 'Unavailable in your Spotify market' : undefined} onDoubleClick={() => { if (!unavailable) onPlay(track) }}>
-      <button className="track-row__play" type="button" aria-label={unavailable ? `${track.title} is unavailable in your Spotify market` : `Play ${track.title}`} disabled={unavailable} onClick={() => onPlay(track)}>
+    <div className={`track-row ${active ? 'track-row--active' : ''} ${unavailable ? 'track-row--unavailable' : ''}`} title={unavailable ? 'Unavailable in your Spotify market' : undefined} onDoubleClick={(event) => { if (!unavailable && !event.target.closest('button')) onPlay(track) }}>
+      <button className="track-row__play" type="button" aria-label={unavailable ? `${track.title} is unavailable in your Spotify market` : `${active && playing ? 'Pause' : 'Play'} ${track.title}`} disabled={unavailable} onClick={() => { if (active) onTogglePlayback(); else onPlay(track) }}>
         <span className="track-row__number">{active && playing ? <span className="playing-bars"><i /><i /><i /></span> : index + 1}</span>
         <span className="track-row__play-icon"><Icon name={active && playing ? 'pause' : 'play'} size={16} /></span>
       </button>
@@ -1942,12 +1942,12 @@ function App() {
                   {virtualLikedRows.map((index) => {
                     const track = spotifyTracks[index]
                     return track
-                      ? <TrackRow key={track.id} track={track} index={index} active={isTrackActive(track)} playing={isPlaying} liked={isMixLiked(track)} onPlay={playSpotifyTrack} onLike={toggleMixLike} likeScope="mix" onMenu={(item) => setPlaylistDialog({ kind: 'track', track: item })} />
+                      ? <TrackRow key={track.id} track={track} index={index} active={isTrackActive(track)} playing={isPlaying} liked={isMixLiked(track)} onPlay={playSpotifyTrack} onTogglePlayback={togglePlayback} onLike={toggleMixLike} likeScope="mix" onMenu={(item) => setPlaylistDialog({ kind: 'track', track: item })} />
                       : <TrackSkeleton key={`liked-loading-${index}`} />
                   })}
                   <div className="track-virtual-spacer" style={{ height: `${Math.max(0, virtualLikedCount - virtualLikedEnd) * virtualRowHeight}px` }} aria-hidden="true" />
                 </div>
-                : displayTracks.length ? displayTracks.map((track, index) => <TrackRow key={`${track.source}:${track.id}-${track.playlistEntryId || index}`} track={track} index={index} active={isTrackActive(track)} playing={isPlaying} liked={isMixLiked(track)} onPlay={mixMode ? playMixTrack : spotifyMode ? playSpotifyTrack : playLocalTrack} onLike={toggleMixLike} likeScope="mix" onMenu={(item) => setPlaylistDialog({ kind: 'track', track: item })} />)
+                : displayTracks.length ? displayTracks.map((track, index) => <TrackRow key={`${track.source}:${track.id}-${track.playlistEntryId || index}`} track={track} index={index} active={isTrackActive(track)} playing={isPlaying} liked={isMixLiked(track)} onPlay={mixMode ? playMixTrack : spotifyMode ? playSpotifyTrack : playLocalTrack} onTogglePlayback={togglePlayback} onLike={toggleMixLike} likeScope="mix" onMenu={(item) => setPlaylistDialog({ kind: 'track', track: item })} />)
                   : <div className="drawer-empty"><Icon name="music" size={28} /><p>{mixMode ? (search ? 'No Mix songs found.' : mixView === 'liked' ? 'Like tracks from Local or Spotify to collect them here.' : 'This Mix playlist is empty. Add tracks from Local or Spotify.') : spotifyMode ? (search ? 'No Spotify songs found.' : spotifyCollection === 'liked' ? 'Your Spotify Liked Songs will appear here.' : `No tracks in ${selectedSpotifyPlaylist?.name || 'this playlist'}.`) : search ? 'No songs found.' : tracks.length ? 'Nothing in this collection yet.' : 'Your library is empty.'}</p>{!spotifyMode && !mixMode && <button className="browse-link" type="button" onClick={() => fileInput.current?.click()}>Add music <Plus size={14} aria-hidden="true" /></button>}</div>}
           </div>
           {!spotifyMode && !mixMode && <button className="drawer-import" type="button" onClick={() => folderInput.current?.click()}><Icon name="folder" size={17} /> Import folder</button>}
